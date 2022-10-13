@@ -35,7 +35,7 @@ namespace WebUI.Controllers
             if (!ModelState.IsValid)
                 return View(model);
 
-            var user = GetUser(model);
+            var user = GetUserIfLoginInformationIsCorrect(model);
             if (user is null)
             {
                 ModelState.AddModelError("", "Username or password is incorrect!!!");
@@ -48,19 +48,10 @@ namespace WebUI.Controllers
                 return View(model);
             }
 
-            List<Claim> claims = new()
-            {
-                new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
-                new Claim(ClaimTypes.Name, user.FullName ?? string.Empty),
-                new Claim(ClaimTypes.Role, user.Role),
-                new Claim("Username", user.UserName ?? string.Empty)
-            };
-
-            ClaimsIdentity identity = new(claims, CookieAuthenticationDefaults.AuthenticationScheme);
-            ClaimsPrincipal principal = new(identity);
-            HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal);
+            SetClaimsAndCookiesThenSignIn(user);
             return RedirectToAction("Index", "Home");
         }
+
         #endregion
 
         #region Register
@@ -81,15 +72,10 @@ namespace WebUI.Controllers
                 return View(model);
             }
 
-            User user = new()
-            {
-                UserName = model.UserName,
-                Password = GetHashedPassword(model.Password)
-            };
-            await _dbContext.Users.AddAsync(user);
-            await _dbContext.SaveChangesAsync();
+            await SaveUserToDB(model);
             return RedirectToAction(nameof(Login));
         }
+
         #endregion
 
         #region Profile
@@ -105,34 +91,27 @@ namespace WebUI.Controllers
         {
             if (ModelState.IsValid)
             {
-                Guid userId = new (User.FindFirstValue(ClaimTypes.NameIdentifier));
-                User user = _dbContext.Users.SingleOrDefault(u => u.Id == userId);
-                user.FullName = fullname;
-                _dbContext.SaveChanges();
-
+                ChangeFullName(fullname);
                 return RedirectToAction(nameof(Profile));
             }
             ProfileInfoLoader();
             return View(nameof(Profile));
         }
 
+
         [HttpPost]
         public IActionResult ProfileChangePassword([Required][MinLength(6)][MaxLength(16)] string? password)
         {
             if (ModelState.IsValid)
             {
-                Guid userId = new(User.FindFirstValue(ClaimTypes.NameIdentifier));
-                User user = _dbContext.Users.SingleOrDefault(u => u.Id == userId);
-                var hashedPassword = GetHashedPassword(password);
-                user.Password = hashedPassword;
-                _dbContext.SaveChanges();
-
+                ChangePassword(password);
                 ViewData["result"] = "PasswordChanged";
             }
             ProfileInfoLoader();
             return View(nameof(Profile));
         }
-        
+
+
         #endregion
 
         #region Logout
@@ -145,12 +124,41 @@ namespace WebUI.Controllers
         #endregion
 
         #region Functions
+        private async Task SaveUserToDB(RegisterViewModel model)
+        {
+            User user = new()
+            {
+                UserName = model.UserName,
+                Password = GetHashedPassword(model.Password)
+            };
+            await _dbContext.Users.AddAsync(user);
+            await _dbContext.SaveChangesAsync();
+        }
+
+        private void ChangeFullName(string? fullname)
+        {
+            Guid userId = new(User.FindFirstValue(ClaimTypes.NameIdentifier));
+            User user = _dbContext.Users.SingleOrDefault(u => u.Id == userId);
+            user.FullName = fullname;
+            _dbContext.SaveChanges();
+        }
+
+        private void ChangePassword(string? password)
+        {
+            Guid userId = new(User.FindFirstValue(ClaimTypes.NameIdentifier));
+            User user = _dbContext.Users.SingleOrDefault(u => u.Id == userId);
+            var hashedPassword = GetHashedPassword(password);
+            user.Password = hashedPassword;
+            _dbContext.SaveChanges();
+        }
+
         private void ProfileInfoLoader()
         {
             Guid userId = new(User.FindFirstValue(ClaimTypes.NameIdentifier));
             User user = _dbContext.Users.SingleOrDefault(u => u.Id == userId);
             ViewData["FullName"] = user.FullName;
         }
+
         public string GetHashedPassword(string str)
         {
             string md5Salt = _configuration.GetValue<string>("AppSettings:MD5Salt");
@@ -164,13 +172,28 @@ namespace WebUI.Controllers
             return _dbContext.Users.Any(u => u.UserName.ToLower().Equals(model.UserName.ToLower()));
         }
 
-        public User GetUser(BaseLoginRegister model)
+        public User GetUserIfLoginInformationIsCorrect(BaseLoginRegister model)
         {
             string hashedPassword = GetHashedPassword(model.Password);
             User user = _dbContext.Users.SingleOrDefault(u => u.UserName.ToLower().Equals(model.UserName.ToLower())
                 && u.Password.Equals(hashedPassword));
 
             return user;
+        }
+
+        private void SetClaimsAndCookiesThenSignIn(User? user)
+        {
+            List<Claim> claims = new()
+            {
+                new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+                new Claim(ClaimTypes.Name, user.FullName ?? string.Empty),
+                new Claim(ClaimTypes.Role, user.Role),
+                new Claim("Username", user.UserName ?? string.Empty)
+            };
+
+            ClaimsIdentity identity = new(claims, CookieAuthenticationDefaults.AuthenticationScheme);
+            ClaimsPrincipal principal = new(identity);
+            HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal);
         }
         #endregion
     }
